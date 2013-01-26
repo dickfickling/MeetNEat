@@ -6,7 +6,7 @@ import sqlite3
 import urllib2
 
 DATABASE = "/tmp/meet.n.eat"
-PLACES_API_KEY = "AIzaSyDie5yxhWorjwPLw8n-bshLujxU9rWxAoA"
+PLACES_API_KEY = "NOPE"
 PLACES_BASE_URL = "https://maps.googleapis.com/maps/api/place/nearbysearch/json?"
 DIRECTIONS_BASE_URL = "http://maps.googleapis.com/maps/api/directions/json?"
 PLACES_RADIUS = 3000
@@ -198,12 +198,25 @@ def api_results(sessionid):
                 where sessionid = ?',
                 (sessionid,))
         results = {}
+        index = 0
         for row in cur.fetchall():
             loc = db.execute('select latitude, longitude from locations where id = ?',
                     (row[1],))
             location = loc.fetchone()
-            results[row[0]] = ((location[0], location[1]), row[2], row[3], row[4], row[5],
-                    row[6], row[7], row[8], row[9])
+            values = {}
+            values["name"] = row[0]
+            values["latitude"] = location[0]
+            values["longitude"] = location[1]
+            values["a_distance"] = row[2]
+            values["b_distance"] = row[3]
+            values["a_time"] = row[4]
+            values["b_time"] = row[5]
+            values["a_veto"] = row[6]
+            values["b_veto"] = row[7]
+            values["a_approve"] = row[8]
+            values["b_approve"] = row[9]
+            results[index] = values
+            index += 1
         if len(results) == 0:
             #XXX Correct error code
             abort(404)
