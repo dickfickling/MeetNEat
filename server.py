@@ -13,9 +13,9 @@ PLACES_RADIUS = 3000
 
 #### XXX:
 ####    Veto / approve
+####    error message handling from apis
 ####    lazy direction getting
 ####    error codes
-####    error message handling from apis
 ####    insert/update location helper
 ####    license
 ####    other helpers
@@ -49,6 +49,14 @@ def count_sessions(db, sessionid, expected_value):
         return True
     return False
 
+def add_location(db, latitude, longitude):
+    db.execute('insert into locations (latitude, longitude) values (?, ?)',
+            (latitude, longitude))
+    rowid = db.execute('select last_insert_rowid()')
+    rowid = rowid.fetchone()[0]
+    db.commit()
+    return rowid
+
 # Process takes a session id, gets the two locations, finds the middle,
 #   uses the places API to find places matching "foodtype", put them in
 #   destinations table, and returns true
@@ -66,50 +74,48 @@ def process(sessionid):
     b_location = db.execute('select latitude, longitude from locations where \
             id = ?', (result[1],))
     b_location = b_location.fetchone()
-    #XXX Make this deal with things correctly
     center_latitude = (a_location[0] + b_location[0]) / 2
     center_longitude = (a_location[1] + b_location[1]) / 2
-    #XXX Update sessions center location (create helper to update location)
+    #Update sessions center location
+    rowid = add_location(db, center_latitude, center_longitude)
+    db.execute('update sessions set center_location = ? where sessionid = ?',
+            (rowid, sessionid))
+    db.commit()
     url = ("%slocation=%f,%f&radius=%d&types=food&keyword=%s&key=%s&sensor=false" % \
             (PLACES_BASE_URL, center_latitude, center_longitude, PLACES_RADIUS, food_pref, \
             PLACES_API_KEY))
     places = json.loads(urllib2.urlopen(url).read())
+    if places['status'] != 'OK':
+        print places['status']
+        return False
     for place in places["results"][:2]:
+        location_latitude = place["geometry"]["location"]["lat"]
+        location_longitude = place["geometry"]["location"]["lng"]
+        if location_latitude is None or location_longitude is None:
+            return False
         a_c_directions_url = ("%sorigin=%f,%f&destination=%f,%f&sensor=false&mode=walking" % \
                 (DIRECTIONS_BASE_URL, a_location[0], a_location[1],\
-                place["geometry"]["location"]["lat"], place["geometry"]["location"]["lng"]))
+                location_latitude, location_longitude))
         b_c_directions_url = ("%sorigin=%f,%f&destination=%f,%f&sensor=false&mode=walking" % \
                 (DIRECTIONS_BASE_URL, b_location[0], b_location[1],\
-                place["geometry"]["location"]["lat"], place["geometry"]["location"]["lng"]))
+                location_latitude, location_longitude))
         a_directions = json.loads(urllib2.urlopen(a_c_directions_url).read())
         b_directions = json.loads(urllib2.urlopen(b_c_directions_url).read())
-        if a_directions["status"] == 'OVER_QUERY_LIMIT' or b_directions["status"] == 'OVER_QUERY_LIMIT':
-            #XXX Correct abort
-            abort(400)
-        a_routes = a_directions["routes"]
-        b_routes = b_directions["routes"]
-        if len(a_routes) >= 1:
-            a_route = a_routes[0]
-        else:
-            #XXX Correct abort
-            abort(400)
-        if len(b_routes) >= 1:
-            b_route = b_routes[0]
-        else:
-            #XXX Correct abort
-            abort(400)
-
-        a_time = a_route["legs"][0]["duration"]["value"]
-        b_time = a_route["legs"][0]["duration"]["value"]
-        a_distance = b_route["legs"][0]["distance"]["value"]
-        b_distance = b_route["legs"][0]["distance"]["value"]
-        lat = place["geometry"]["location"]["lat"]
-        lng = place["geometry"]["location"]["lng"]
-        db.execute('insert into locations (latitude, longitude) values (?, ?)',
-                (lat, lng))
-        rowid = db.execute('select last_insert_rowid()')
-        db.execute('insert into destinations values (?, ?, ?, ?, ?, ?, ?)', \
-                (sessionid, place["name"], rowid.fetchone()[0], a_distance, b_distance, \
+        if a_directions["status"] != "OK" or b_directions["status"] != "OK":
+            return False
+        # XXX If necessary, I will break this up and (error) handle the fuck out of it
+        a_routes = a_directions["routes"][0]
+        b_routes = b_directions["routes"][0]
+        a_time = a_routes["legs"][0]["duration"]["value"]
+        b_time = a_routes["legs"][0]["duration"]["value"]
+        a_distance = b_routes["legs"][0]["distance"]["value"]
+        b_distance = b_routes["legs"][0]["distance"]["value"]
+        row_id = add_location(db, location_latitude, location_longitude)
+        db.execute('insert into destinations \
+                (sessionid, name, location, a_distance, b_distance, \
+                a_time, b_time) \
+                values (?, ?, ?, ?, ?, ?, ?)', \
+                (sessionid, place["name"], rowid, a_distance, b_distance, \
                 a_time, b_time))
     db.commit()
     return True
@@ -135,15 +141,12 @@ def api_init(sessionid):
             db = get_db()
             if not count_sessions(db, sessionid, 0):
                 abort(400)
-            db.execute('insert into locations (latitude, longitude) values (?, ?)',
-                    (latitude, longitude))
-            rowid = db.execute('select last_insert_rowid()')
+            rowid = add_location(db, latitude, longitude)
             db.execute('insert into sessions (sessionid, a_location, food_pref) values \
-                    (?, ?, ?)', (sessionid, rowid.fetchone()[0], foodtype))
+                    (?, ?, ?)', (sessionid, rowid, foodtype))
             db.commit()
             return jsonify({"success":sessionid})
         else:
-
             #XXX Return error code 400
             abort(400)
     else:
@@ -159,18 +162,18 @@ def api_join(sessionid):
             if latitude is None or \
                     longitude is None:
                         #XXX Correct error code
+                        print "bad location"
                         abort(400)
             db = get_db()
             if not count_sessions(db, sessionid, 1):
                 #XXX Correct error code
+                print "no session"
                 abort(400)
-            db.execute('insert into locations (latitude, longitude) values (?, ?)',
-                    (latitude, longitude))
-            rowid = db.execute('select last_insert_rowid()')
+            rowid = add_location(db, latitude, longitude)
             db.execute('update sessions set b_location = ? where sessionid = ?',
-                    (rowid.fetchone()[0], sessionid))
+                    (rowid, sessionid))
             db.commit()
-            #XXX Process!
+            # Process!
             if process(sessionid):
                 return jsonify({"success":sessionid})
             else:
@@ -180,7 +183,7 @@ def api_join(sessionid):
             #XXX Correct error code
             abort(400)
     else:
-        #XXX Return something useful
+        #XXX Correct error code
         abort(400)
 
 @app.route("/<sessionid>/results", methods = ['GET', 'POST'])
@@ -203,7 +206,7 @@ def api_results(sessionid):
                     row[6], row[7], row[8], row[9])
         if len(results) == 0:
             #XXX Correct error code
-            abort(304)
+            abort(404)
         else:
             return jsonify(results)
     elif request.method == 'POST':
@@ -211,7 +214,7 @@ def api_results(sessionid):
         if not count_sessions(db, sessionid, 1):
             #XXX Correct error code
             abort(418)
-        #XXX veto/approve by flag
+        # veto/approve by flag
         a_veto = request['a_veto']
         b_veto = request['b_veto']
         a_approve = request['a_approve']
