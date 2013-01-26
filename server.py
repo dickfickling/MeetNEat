@@ -1,13 +1,5 @@
 
 
-
-
-
-
-
-
-
-
 from flask import Flask,request,json,jsonify,session,g,_app_ctx_stack, \
         redirect,url_for,flash,render_template,abort
 import sqlite3
@@ -17,8 +9,18 @@ DATABASE = "/tmp/meet.n.eat"
 PLACES_API_KEY = "AIzaSyDie5yxhWorjwPLw8n-bshLujxU9rWxAoA"
 PLACES_BASE_URL = "https://maps.googleapis.com/maps/api/place/nearbysearch/json?"
 DIRECTIONS_BASE_URL = "http://maps.googleapis.com/maps/api/directions/json?"
+PLACES_RADIUS = 3000
 
-#### XXX: Nothing ATT
+#### XXX:
+####    Veto / approve
+####    lazy direction getting
+####    error codes
+####    error message handling from apis
+####    insert/update location helper
+####    license
+####    other helpers
+####    location - sql join
+
 
 app = Flask(__name__)
 app.config.from_object(__name__)
@@ -68,11 +70,11 @@ def process(sessionid):
     center_latitude = (a_location[0] + b_location[0]) / 2
     center_longitude = (a_location[1] + b_location[1]) / 2
     #XXX Update sessions center location (create helper to update location)
-    url = ("%slocation=%f,%f&radius=1000&types=food&keyword=%s&key=%s&sensor=false" % \
-            (PLACES_BASE_URL, center_latitude, center_longitude, food_pref, \
+    url = ("%slocation=%f,%f&radius=%d&types=food&keyword=%s&key=%s&sensor=false" % \
+            (PLACES_BASE_URL, center_latitude, center_longitude, PLACES_RADIUS, food_pref, \
             PLACES_API_KEY))
     places = json.loads(urllib2.urlopen(url).read())
-    for place in places["results"][:9]:
+    for place in places["results"][:2]:
         a_c_directions_url = ("%sorigin=%f,%f&destination=%f,%f&sensor=false&mode=walking" % \
                 (DIRECTIONS_BASE_URL, a_location[0], a_location[1],\
                 place["geometry"]["location"]["lat"], place["geometry"]["location"]["lng"]))
@@ -80,11 +82,27 @@ def process(sessionid):
                 (DIRECTIONS_BASE_URL, b_location[0], b_location[1],\
                 place["geometry"]["location"]["lat"], place["geometry"]["location"]["lng"]))
         a_directions = json.loads(urllib2.urlopen(a_c_directions_url).read())
-        b_directions = json.loads(urllib2.urlopen(b_c_directions_url).read())
-        a_time = a_directions["routes"][0]["legs"][0]["duration"]["value"]
-        b_time = b_directions["routes"][0]["legs"][0]["duration"]["value"]
-        a_distance = a_directions["routes"][0]["legs"][0]["distance"]["value"]
-        b_distance = b_directions["routes"][0]["legs"][0]["distance"]["value"]
+if request.json        b_directions = json.loads(urllib2.urlopen(b_c_directions_url).read())
+        if a_directions["status"] == 'OVER_QUERY_LIMIT' or b_directions["status"] == 'OVER_QUERY_LIMIT':
+            #XXX Correct abort
+            abort(400)
+        a_routes = a_directions["routes"]
+        b_routes = b_directions["routes"]
+        if len(a_routes) >= 1:
+            a_route = a_routes[0]
+        else:
+            #XXX Correct abort
+            abort(400)
+        if len(b_routes) >= 1:
+            b_route = b_routes[0]
+        else:
+            #XXX Correct abort
+            abort(400)
+
+        a_time = a_route["legs"][0]["duration"]["value"]
+        b_time = a_route["legs"][0]["duration"]["value"]
+        a_distance = b_route["legs"][0]["distance"]["value"]
+        b_distance = b_route["legs"][0]["distance"]["value"]
         lat = place["geometry"]["location"]["lat"]
         lng = place["geometry"]["location"]["lng"]
         db.execute('insert into locations (latitude, longitude) values (?, ?)',
@@ -100,7 +118,7 @@ def process(sessionid):
 
 @app.route("/")
 def hello():
-    return "Hello World!\n"
+    return "Fuck off\n"
 
 @app.route("/<sessionid>/init", methods = ['POST'])
 def api_init(sessionid):
@@ -165,7 +183,7 @@ def api_join(sessionid):
         #XXX Return something useful
         abort(400)
 
-@app.route("/<sessionid>/results", methods = ['GET'])
+@app.route("/<sessionid>/results", methods = ['GET', 'POST'])
 def api_results(sessionid):
     if request.method == 'GET':
         db = get_db()
@@ -173,7 +191,7 @@ def api_results(sessionid):
             #XXX Correct error code
             abort(418)
         cur = db.execute('select name, location, a_distance, b_distance, \
-                a_time, b_time from destinations \
+                a_time, b_time, a_veto, b_veto, a_approve, b_approve from destinations \
                 where sessionid = ?',
                 (sessionid,))
         results = {}
@@ -181,12 +199,37 @@ def api_results(sessionid):
             loc = db.execute('select latitude, longitude from locations where id = ?',
                     (row[1],))
             location = loc.fetchone()
-            results[row[0]] = ((location[0], location[1]), row[2], row[3], row[4], row[5])
+            results[row[0]] = ((location[0], location[1]), row[2], row[3], row[4], row[5],
+                    row[6], row[7], row[8], row[9])
         if len(results) == 0:
             #XXX Correct error code
-            abort(420)
+            abort(304)
         else:
             return jsonify(results)
+    elif request.method == 'POST':
+        db = get_db()
+        if not count_sessions(db, sessionid, 1):
+            #XXX Correct error code
+            abort(418)
+        #XXX veto/approve by flag
+        a_veto = request['a_veto']
+        b_veto = request['b_veto']
+        a_approve = request['a_approve']
+        b_approve = request['b_approve']
+        name = request['name']
+        if a_veto is not None:
+            db.execute('update destinations set a_veto 1 where name = ?',
+                    (name))
+        if b_veto is not None:
+            db.execute('update destinations set b_veto 1 where name = ?',
+                    (name))
+        if a_approve is not None:
+            db.execute('update destinations set a_approve 1 where name = ?',
+                    (name))
+        if b_approve is not None:
+            db.execute('update destinations set b_approve 1 where name = ?',
+                    (name))
+
     else:
         #XXX Return something useful
         abort(400)

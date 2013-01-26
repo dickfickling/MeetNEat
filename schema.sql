@@ -23,6 +23,10 @@ create table if not exists destinations (
     a_distance integer not null,
     b_distance integer not null,
     a_time integer not null,
-    b_time integer not null
+    b_time integer not null,
+    a_veto integer default 0,
+    b_veto integer default 0,
+    a_approve integer default 0,
+    b_approve integer default 0
 );
 
