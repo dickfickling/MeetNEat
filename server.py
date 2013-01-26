@@ -82,7 +82,7 @@ def process(sessionid):
                 (DIRECTIONS_BASE_URL, b_location[0], b_location[1],\
                 place["geometry"]["location"]["lat"], place["geometry"]["location"]["lng"]))
         a_directions = json.loads(urllib2.urlopen(a_c_directions_url).read())
-if request.json        b_directions = json.loads(urllib2.urlopen(b_c_directions_url).read())
+        b_directions = json.loads(urllib2.urlopen(b_c_directions_url).read())
         if a_directions["status"] == 'OVER_QUERY_LIMIT' or b_directions["status"] == 'OVER_QUERY_LIMIT':
             #XXX Correct abort
             abort(400)
